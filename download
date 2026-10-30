@@ -1,0 +1,14 @@
+data/raw/
+data/raw_synth/
+data/parquet/
+data/parquet_synth/
+outputs/
+outputs_synth/
+artifacts/
+artifacts_synth/
+powerbi/data/
+powerbi_synth/
+__pycache__/
+.pytest_cache/
+*.duckdb
+_duckdb_tmp/

@@ -1,0 +1,5 @@
+{
+  "members":      {"user_id": "msno"},
+  "transactions": {"user_id": "msno", "start_date": "transaction_date", "expiry_date": "membership_expire_date"},
+  "user_logs":    {"user_id": "msno", "log_date": "date", "listen_secs": "total_secs"}
+}

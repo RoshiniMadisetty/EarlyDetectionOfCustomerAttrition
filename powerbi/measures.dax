@@ -1,0 +1,110 @@
+// ============================================================================
+// DAX measures for the churn early-warning report.
+// NOT TESTED: these were written without access to Power BI Desktop. Paste them
+// one by one (Modeling > New measure) and fix any naming differences. Table and
+// column names match the CSV files in powerbi/data (Power BI names a table after
+// its file, e.g. predictions.csv -> predictions).
+// ============================================================================
+
+// ---------------------------- Page 2: early-warning view ----------------------
+Customers Scored = COUNTROWS ( predictions )
+
+Actual Churners = SUM ( predictions[is_churn] )
+
+Churn Rate = DIVIDE ( [Actual Churners], [Customers Scored] )
+
+Flagged (High + Critical) =
+CALCULATE ( [Customers Scored], predictions[risk_band] IN { "High", "Critical" } )
+
+Churners Caught (High + Critical) =
+CALCULATE ( [Actual Churners], predictions[risk_band] IN { "High", "Critical" } )
+
+Precision (High + Critical) =
+DIVIDE ( [Churners Caught (High + Critical)], [Flagged (High + Critical)] )
+
+Recall (High + Critical) =
+DIVIDE ( [Churners Caught (High + Critical)], [Actual Churners] )
+
+Lift (High + Critical) =
+DIVIDE ( [Precision (High + Critical)], [Churn Rate] )
+
+Mean Calibrated Risk = AVERAGE ( predictions[p_cal] )
+
+Revenue at Risk (expected) =
+SUMX ( predictions, predictions[p_cal] * predictions[renewal_value] )
+
+Abstain Share =
+DIVIDE (
+    CALCULATE ( [Customers Scored], predictions[decision] = "abstain" ),
+    [Customers Scored]
+)
+
+Avg Interval Width =
+AVERAGEX ( predictions, predictions[p_high] - predictions[p_low] )
+
+// ---------------------------- Page 3: why this customer -----------------------
+// Use with a drill-through page filtered on predictions[row_key].
+Customer Risk (calibrated) = AVERAGE ( predictions[p_cal] )
+Customer Risk Low  = AVERAGE ( predictions[p_low] )
+Customer Risk High = AVERAGE ( predictions[p_high] )
+
+Customer Risk Text =
+VAR p  = FORMAT ( [Customer Risk (calibrated)], "0.0%" )
+VAR lo = FORMAT ( [Customer Risk Low], "0.0%" )
+VAR hi = FORMAT ( [Customer Risk High], "0.0%" )
+RETURN p & "  (range " & lo & " to " & hi & ")"
+
+// Waterfall of SHAP contributions: put shap_values_long[feature] on Category and
+// this measure on Y; add a Top N filter (10 by absolute value) on feature.
+SHAP Contribution = SUM ( shap_values_long[shap_value] )
+Abs SHAP = SUMX ( shap_values_long, ABS ( shap_values_long[shap_value] ) )
+
+// ---------------------------- Page 4: value and monitoring --------------------
+// value_of_lead_time.csv holds one row per horizon x k x p_save x offer cost x lead effect.
+// Put single-select slicers on k_pct, p_save, offer_cost_frac, lead_effect so each
+// horizon resolves to one row. The measures below then sum that single row.
+Profit (selected scenario) = SUM ( value_of_lead_time[profit] )
+Profit vs Random Contact   = SUM ( value_of_lead_time[profit_gain_vs_random] )
+Precision at k (scenario)  = AVERAGE ( value_of_lead_time[precision] )
+Recall at k (scenario)     = AVERAGE ( value_of_lead_time[recall] )
+
+Best Horizon (by profit) =
+VAR t =
+    ADDCOLUMNS (
+        VALUES ( horizons[horizon] ),
+        "@profit", [Profit (selected scenario)]
+    )
+VAR top1 = TOPN ( 1, t, [@profit], DESC )
+RETURN MAXX ( top1, horizons[horizon] )
+
+Max PSI = MAX ( drift_psi[psi] )
+
+Share of Features with Major Drift =
+DIVIDE (
+    CALCULATE (
+        DISTINCTCOUNT ( drift_psi[feature] ),
+        drift_psi[status] = "major"
+    ),
+    DISTINCTCOUNT ( drift_psi[feature] )
+)
+
+PR-AUC (static model) =
+CALCULATE ( AVERAGE ( drift_metrics[pr_auc] ), drift_metrics[strategy] = "static" )
+PR-AUC (rolling retrain) =
+CALCULATE ( AVERAGE ( drift_metrics[pr_auc] ), drift_metrics[strategy] = "rolling" )
+
+// ---------------------------- Calculated columns (table: predictions) ---------
+// Create with Modeling > New column, then set risk_band to "Sort by column" risk_band_order.
+// risk_band_order =
+//     SWITCH ( predictions[risk_band], "Low", 1, "Medium", 2, "High", 3, "Critical", 4, 0 )
+//
+// Has SHAP =
+//     IF ( COUNTROWS ( RELATEDTABLE ( shap_base ) ) > 0, "Yes", "No" )
+// (only a sample of customers per horizon has SHAP values; see --export-n in src/explain.py)
+
+// ---------------------------- Headline value chart (no k slicer needed) -------
+// Uses value_of_lead_time_best, which holds the best policy per horizon and scenario.
+// Put single-select slicers on p_save, offer_cost_frac and lead_effect.
+Best Profit    = SUM ( value_of_lead_time_best[profit] )
+Best k (%)     = AVERAGE ( value_of_lead_time_best[k_pct] )
+Best Profit vs Random = SUM ( value_of_lead_time_best[profit_gain_vs_random] )
