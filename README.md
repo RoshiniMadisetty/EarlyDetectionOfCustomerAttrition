@@ -93,22 +93,8 @@ Parquet, but modelling loads one horizon into pandas. For development use
 XGBoost model, calibrator and metadata per horizon. `powerbi/data/` holds the CSV tables for
 Power BI; see `powerbi/POWERBI_GUIDE.md` and `powerbi/measures.dax`.
 
-## Known limitations (state these in the paper)
 
-- One dataset and one domain (music streaming). No support-ticket data exists in this schema.
-- SHAP values are on the log-odds scale of the class-weighted raw score, not calibrated
-  probabilities. Rankings and relative sizes are meaningful; absolute sizes are not.
-- XGBoost early stopping uses the validation month, which is then also used for
-  calibration. The test month is untouched, but the validation month is used twice.
-- Profit results depend on the assumed `p_save` and cost fractions. Always show the
-  sensitivity grid.
-- Interval bounds are Wilson intervals of the observed churn rate in the score's
-  validation bin. They describe calibration uncertainty, not per-customer prediction intervals.
-- Labels are rebuilt from the transaction files; public projects report 97% to 99% agreement
-  with the official KKBox labels, so run `check_labels` and report your own agreement.
-- Tested on Python 3.10 and 3.13 with synthetic data only.
-- The DAX measures are untested. The pipeline and tests were run only on synthetic data
-  in this workspace, not on the real files.
+
 
 ## Not included (optional extensions)
 
