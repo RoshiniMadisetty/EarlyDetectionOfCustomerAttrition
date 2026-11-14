@@ -1,7 +1,7 @@
 """Synthetic dataset in the SAME FILE FORMAT as the KKBox churn data (for tests and dry runs).
 
 Writes into ``raw_dir``: members_v3.csv, transactions.csv, transactions_v2.csv, user_logs.csv,
-user_logs_v2.csv, train.csv  (+ ``_synth_truth.csv``, which does NOT exist in the real data).
+user_logs_v2.csv, train.csv (Feb-2017 expiries), train_v2.csv (Mar-2017 expiries)  (+ ``_synth_truth.csv``, which does NOT exist in the real data).
 
 What is planted (so later pipeline stages can be tested against known ground truth):
   * monthly/quarterly plans; auto-renew and manual-renew members (manual ones sometimes renew late);
@@ -46,6 +46,7 @@ D_JOIN_MAX = _d("2016-08-01")
 D_V1_END = _d("2017-02-28")  # last day in transactions.csv / user_logs.csv
 D_END = _d("2017-03-31")  # last day in *_v2 files
 FEB_START = _d("2017-02-01")
+MAR_START = _d("2017-03-01")
 CHURN_GAP_DAYS = 30
 
 
@@ -200,6 +201,10 @@ def generate(
     truth_df["in_train"] = ((truth_df["expire_day"] >= FEB_START) & (truth_df["expire_day"] <= D_V1_END)).astype(int)
     train = truth_df[truth_df["in_train"] == 1].sort_values("expire_day").drop_duplicates("msno", keep="last")
     train[["msno", "is_churn"]].to_csv(raw_dir / "train.csv", index=False)
+    # train_v2.csv: customers with an expiry in March 2017 (labels by construction; the real April data is not needed)
+    train2 = truth_df[(truth_df["expire_day"] >= MAR_START) & (truth_df["expire_day"] <= D_END)]
+    train2 = train2.sort_values("expire_day").drop_duplicates("msno", keep="last")
+    train2[["msno", "is_churn"]].to_csv(raw_dir / "train_v2.csv", index=False)
     truth_df.drop(columns=["expire_day"]).to_csv(raw_dir / "_synth_truth.csv", index=False)
 
     return {
