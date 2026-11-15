@@ -111,7 +111,8 @@ def slice_table(df: pd.DataFrame, col: str, min_n: int = 300, min_pos: int = 30)
     return pd.DataFrame(rows)
 
 
-def run_model(X, ev: pd.DataFrame, has_log, L: int, h: int = 7, train_end="2017-02-14", min_baseline=MIN_BASELINE) -> dict:
+def run_model(X, ev: pd.DataFrame, has_log, L: int, h: int = 7, train_end="2017-02-14", min_baseline=MIN_BASELINE,
+              exclude_shared: bool = False) -> dict:
     from sklearn.metrics import roc_auc_score, brier_score_loss
     if not check_feature_leakage(X, ev, L, h):
         raise AssertionError("LEAKAGE: features changed when post-cutoff days were scrambled")
@@ -122,7 +123,11 @@ def run_model(X, ev: pd.DataFrame, has_log, L: int, h: int = 7, train_end="2017-
     d["y"] = d["is_churn"].to_numpy()
     tr = ok & (d["expiry_date"] <= pd.Timestamp(train_end)).to_numpy()
     train_customers = set(d.loc[tr, "msno"])
-    mon = ok & (d["expiry_date"] > pd.Timestamp(train_end)).to_numpy() & (~d["msno"].isin(train_customers)).to_numpy()
+    late = ok & (d["expiry_date"] > pd.Timestamp(train_end)).to_numpy()
+    shared = late & d["msno"].isin(train_customers).to_numpy()
+    # exclude_shared=True drops later events of customers seen in training (independence), but on real data this removes
+    # most renewing customers and changes the population mix (a drift ARTEFACT), so the default keeps them and reports the count.
+    mon = late & ~shared if exclude_shared else late
     model = fit_model(F[tr], d.loc[tr, "y"])
     score = np.full(len(d), np.nan)
     score[ok] = model.predict_proba(F.loc[ok, FEATURES].to_numpy())[:, 1]
@@ -130,7 +135,8 @@ def run_model(X, ev: pd.DataFrame, has_log, L: int, h: int = 7, train_end="2017-
     d["split"] = np.where(tr, "train", np.where(mon, "monitor", "excluded"))
     m = d[mon]
     out = {"scores": d[["event_id", "split", "score"]], "features": F, "model": model, "n_train": int(tr.sum()),
-           "n_monitor": int(mon.sum()), "n_excluded_shared_customers": int((ok & (d["expiry_date"] > pd.Timestamp(train_end)).to_numpy() & d["msno"].isin(train_customers).to_numpy()).sum())}
+           "n_monitor": int(mon.sum()), "n_excluded_shared_customers": int(shared.sum()) if exclude_shared else 0,
+           "n_monitor_events_from_training_customers": int((mon & shared).sum()), "exclude_shared": bool(exclude_shared)}
     out["metrics"] = {
         "auc_monitor": float(roc_auc_score(m["y"], m["score"])), "brier_monitor": float(brier_score_loss(m["y"], m["score"])),
         "ece_monitor": ece(m["y"], m["score"]), "auc_train": float(roc_auc_score(d.loc[tr, "y"], d.loc[tr, "score"])),
