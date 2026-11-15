@@ -94,13 +94,14 @@ def participant_sheets(sets: pd.DataFrame, n_participants: int, trials_per_condi
     return pd.DataFrame(rows)
 
 
-def render_trial(path, X, panel_rows: List[int], condition: str, L: int, h: int = 14, show_days: int = 60):
+def render_trial(path, X, panel_rows: List[int], condition: str, L: int, h: int = 14, show_days: int = 60, cusum_h: float = 5.0):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     M = np.expm1(X[panel_rows].astype(np.float64)).astype(np.float32)
     ema = sm.ema(M, 0.15)
-    _, first = sm.cusum_down(X[panel_rows], L)
+    S_, _ = sm.cusum_down(X[panel_rows], L)
+    first = sm.cusum_first(S_, L, cusum_h)
     k = np.arange(L, 0, -1)
     vis = (k >= h) & (k <= show_days + h)
     fig, axs = plt.subplots(2, 3, figsize=(12, 6), sharex=True)
@@ -122,14 +123,14 @@ def render_trial(path, X, panel_rows: List[int], condition: str, L: int, h: int 
     fig.tight_layout(); fig.savefig(path, dpi=100); plt.close(fig)
 
 
-def render_all(out_dir, trials: pd.DataFrame, X, L: int) -> List[str]:
+def render_all(out_dir, trials: pd.DataFrame, X, L: int, cusum_h: float = 5.0) -> List[str]:
     """One PNG per (set, condition): 24 sets x 4 conditions = 96 images."""
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     files = []
     for r in trials.itertuples():
         for cond in CONDITIONS:
             f = out / f"{r.trial_id}_{cond}.png"
-            render_trial(f, X, list(r.panel_rows), cond, L, r.cutoff_days_before_expiry)
+            render_trial(f, X, list(r.panel_rows), cond, L, r.cutoff_days_before_expiry, cusum_h=cusum_h)
             files.append(str(f))
     return files
 
