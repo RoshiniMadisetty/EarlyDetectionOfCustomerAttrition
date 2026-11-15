@@ -145,3 +145,9 @@ def cusum_down(X: np.ndarray, L: int, ref_days=(90, 61), alarm_days: int = 60, k
     m = S[:, L - alarm_days:] > h
     first = np.where(m.any(axis=1), alarm_days - m.argmax(axis=1), 0)
     return S, first
+
+
+def cusum_first(S: np.ndarray, L: int, h: float, alarm_days: int = 60) -> np.ndarray:
+    """First-alarm day (days before expiry; 0 = none) from a CUSUM statistic matrix and a threshold h."""
+    m = S[:, L - alarm_days:] > h
+    return np.where(m.any(axis=1), alarm_days - m.argmax(axis=1), 0)
