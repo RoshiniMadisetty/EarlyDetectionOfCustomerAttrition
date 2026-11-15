@@ -162,8 +162,9 @@ def build_events(con, sample_dir, history_source: Optional[str] = None) -> pd.Da
                (b.expiry_date >= DATE '{lo}' AND b.expiry_date <= DATE '{hi}') AS in_target_month
         FROM base b LEFT JOIN plan p USING (msno)"""
         frames.append(con.execute(q).df())
-    ev = pd.concat(frames, ignore_index=True)
+    ev = pd.concat(frames, ignore_index=True).sort_values(["period", "msno"], kind="mergesort").reset_index(drop=True)  # deterministic event ids
     ev["explicit_cancel"] = ev["explicit_cancel"].fillna(0).astype(int)
+    ev["in_target_month"] = ev["in_target_month"].fillna(False).astype(bool)   # NULL expiry (no transactions) -> not in month
     ev["silent"] = ((ev["is_churn"] == 1) & (ev["explicit_cancel"] == 0)).astype(int)
     ev["is_auto_renew"] = ev["is_auto_renew"].fillna(0).astype(int)
     ev["expiry_date"] = pd.to_datetime(ev["expiry_date"])
@@ -181,3 +182,30 @@ def events_report(ev: pd.DataFrame) -> pd.DataFrame:
         "expiry_in_target_month_pct": 100 * g["in_target_month"].mean(),
         "from_fallback_pct": 100 * g.apply(lambda d: (d.expiry_source != "official_window").mean(), include_groups=False),
     }).round(2)
+
+
+def purchase_cycle_profile(con, sample_dir, events: pd.DataFrame) -> pd.DataFrame:
+    """Diagnostic: churn rate by how the customer arrived at their last purchase.
+    first_ever = no earlier non-cancelled purchase; continuous = bought within 3 days of the previous expiry;
+    lapse_returner = bought more than 3 days after the previous expiry. Also the days from last purchase to expiry."""
+    ev = events[events["in_target_month"]][["event_id", "msno", "is_churn", "silent", "expiry_date", "cutoff_date"]].copy()
+    ev["expiry_date"] = pd.to_datetime(ev["expiry_date"]).dt.date
+    ev["cutoff_date"] = pd.to_datetime(ev["cutoff_date"]).dt.date
+    con.register("ev_cycle", ev)
+    tx = tx_relation(sample_dir, "union")
+    q = f"""
+    WITH j AS (
+        SELECT e.event_id, e.is_churn, e.silent, e.expiry_date, t.transaction_date AS td, t.membership_expire_date AS ed,
+               row_number() OVER (PARTITION BY e.event_id ORDER BY {_order(False, 't.')}) AS rn
+        FROM ev_cycle e JOIN {tx} t ON t.msno = e.msno
+        WHERE t.is_cancel = 0 AND t.transaction_date <= e.cutoff_date),
+    last AS (SELECT * FROM j WHERE rn = 1), prev AS (SELECT event_id, ed AS prev_ed FROM j WHERE rn = 2)
+    SELECT CASE WHEN prev.prev_ed IS NULL THEN 'first_ever'
+                WHEN date_diff('day', prev.prev_ed, last.td) <= 3 THEN 'continuous' ELSE 'lapse_returner' END AS arrival,
+           count(*) AS events, round(100*avg(last.is_churn), 2) AS churn_pct,
+           round(100*avg(CASE WHEN last.is_churn = 1 THEN last.silent END), 1) AS silent_pct_of_churn,
+           round(median(date_diff('day', last.td, last.expiry_date)), 1) AS median_days_purchase_to_expiry
+    FROM last LEFT JOIN prev USING (event_id) GROUP BY 1 ORDER BY events DESC"""
+    out = con.execute(q).df()
+    con.unregister("ev_cycle")
+    return out
