@@ -59,7 +59,7 @@ def step_series(a):
     if p.exists() and not a.force:
         _log("series: skipped (exists)"); return
     X, has_log, info = series.build_series(_con(a), a.sample_dir, ev, a.L)
-    outside = ~ev["in_target_month"].to_numpy().astype(bool)
+    outside = ~ev["in_target_month"].fillna(False).to_numpy().astype(bool)
     info["events_outside_target_month_excluded"] = int(outside.sum())
     has_log = has_log & ~outside          # 'analysable' requires listening data AND an expiry inside the target month
     series.save_series(p, X, has_log, ev["event_id"].to_numpy(), a.L)
@@ -92,7 +92,7 @@ def step_model(a):
         _log("model: skipped (exists)"); return
     ev = pd.read_parquet(Path(a.work) / "events.parquet")
     X, has_log, ids, L = series.load_series(Path(a.work) / "series.npz")
-    mo = md.run_model(X, ev, has_log, L, h=a.h)
+    mo = md.run_model(X, ev, has_log, L, h=a.h, exclude_shared=a.exclude_shared)
     members = _members(a)
     if members is not None:
         mo["slices"] = md.build_slices(mo["split_frame"], members)
@@ -100,7 +100,8 @@ def step_model(a):
     pickle.dump(mo, open(p, "wb"))
     _log("model: leakage test passed")
     print(json.dumps({**mo["metrics"], "n_train": mo["n_train"], "n_monitor": mo["n_monitor"],
-                      "n_excluded_shared_customers": mo["n_excluded_shared_customers"]}, indent=2))
+                      "n_excluded_shared_customers": mo["n_excluded_shared_customers"],
+                      "n_monitor_events_from_training_customers": mo["n_monitor_events_from_training_customers"]}, indent=2))
     print(mo["importance"].round(4).to_string(index=False))
     print(mo["perf_week"].round(3).to_string(index=False))
 
@@ -153,7 +154,8 @@ def step_usability(a):
     X, has_log, ids, L = series.load_series(Path(a.work) / "series.npz")
     sets = us.make_trials(ev, X, has_log, L, seed=a.seed)
     sheets = us.participant_sheets(sets, a.participants)
-    files = us.render_all(out / "images", sets, X, L)
+    h_c, _, _ = bm.cusum_threshold(X, ev, has_log, L)
+    files = us.render_all(out / "images", sets, X, L, cusum_h=h_c)
     us.answer_key(sets).to_csv(out / "answer_key.csv", index=False)
     sheets.to_csv(out / "participant_sheets.csv", index=False)
     sheets.assign(n_correct="", time_s="", confidence="")[["participant", "condition", "trial_id", "n_correct", "time_s", "confidence"]].to_csv(out / "response_template.csv", index=False)
@@ -185,6 +187,7 @@ def main(argv=None):
     ap.add_argument("--B", type=int, default=200, help="bootstrap resamples")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--history-source", default=None, choices=["v1", "v2", "union"], help="default: v1 for the Feb cohort, union for Mar")
+    ap.add_argument("--exclude-shared", action="store_true", help="model step: drop monitoring events of customers seen in training")
     ap.add_argument("--participants", type=int, default=12)
     ap.add_argument("--results", default=None, help="CSV of usability responses for usability-analyze")
     ap.add_argument("--memory", default="8GB")
