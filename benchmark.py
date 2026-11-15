@@ -99,6 +99,7 @@ def run_benchmark(X, ev: pd.DataFrame, has_log: np.ndarray, smoothers: List[Smoo
                            "no_logs_in_window": [int((~np.asarray(has_log, bool)).sum())],
                            "low_baseline": [int((np.asarray(has_log, bool) & (base_all < min_baseline)).sum())]})
     rows = []
+    raw_store = {}
     Xs = X[sel]
     Bsel = base_all[sel]
     for sm in smoothers:
@@ -126,6 +127,17 @@ def run_benchmark(X, ev: pd.DataFrame, has_log: np.ndarray, smoothers: List[Smoo
                     tau = float(MR[min(np.searchsorted(cum, (1 - alpha) * cum[-1], side="left"), len(MR) - 1)]) if cum[-1] > 0 else np.nan
                     res.append(_metrics(M, Dc, tau, wR, wC, MR))
                 est = res[0]
+                if sm.family == "raw":
+                    raw_store[(g, alpha)] = res
+                elif (g, alpha) in raw_store:
+                    # paired difference vs the raw (unsmoothed) detector: same bootstrap resamples, same customers
+                    rr = raw_store[(g, alpha)]
+                    for metric in ("tpr_L7", "tpr_L14", "tpr_L21", "tpr_L28", "tpr_any"):
+                        diffs = np.array([a[metric] - b_[metric] for a, b_ in zip(res, rr)], dtype=float)
+                        lo, hi = (np.nanpercentile(diffs[1:], [2.5, 97.5]) if B > 0 else (np.nan, np.nan))
+                        rows.append({"method": sm.name, "family": sm.family, "param": sm.param, "causal": sm.causal,
+                                     "group": g, "alpha": alpha, "metric": f"{metric}_minus_raw", "estimate": diffs[0], "lo": lo, "hi": hi,
+                                     "n_churn": len(C_idx), "n_retained": len(R_idx)})
                 for metric in est:
                     arr = np.array([r[metric] for r in res[1:]], dtype=float)
                     lo, hi = (np.nanpercentile(arr, [2.5, 97.5]) if B > 0 and np.isfinite(arr).any() else (np.nan, np.nan))
@@ -153,3 +165,14 @@ def alarm_leads_for(sm: Smoother, X, ev, has_log, L, alpha=0.10, min_baseline=MI
     out = np.full(len(ev), -1, dtype=int)
     out[sel] = first_alarm_lead(D, tau)
     return out
+
+
+def cusum_threshold(X, ev: pd.DataFrame, has_log, L: int, alpha: float = 0.10, min_baseline: float = MIN_BASELINE):
+    """CUSUM alarm threshold h calibrated like every other detector: a fraction alpha of analysable RETAINED events ever alarm.
+    Returns (h, S, analysable_mask). (The textbook h=5 alarms ~40% of customers on this noisy, zero-inflated series.)"""
+    from .smoothers import cusum_down
+    ok = np.asarray(has_log, bool) & (baseline(X, L) >= min_baseline)
+    S, _ = cusum_down(X, L)
+    M = S[:, L - 60:].max(axis=1)
+    h = float(np.quantile(M[ok & (ev["is_churn"].to_numpy() == 0)], 1 - alpha))
+    return h, S, ok
