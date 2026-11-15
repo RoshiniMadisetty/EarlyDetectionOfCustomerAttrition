@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from . import smoothers as sm
-from .benchmark import baseline, best_per_family, MIN_BASELINE
+from .benchmark import baseline, best_per_family, cusum_threshold, MIN_BASELINE
 from .exports import CATEGORICAL, REPRESENTATIVE
 
 FAM_COL = {"raw": "#999999", "SMA": "#0072B2", "EMA": "#D55E00", "LOWESS": "#009E73", "Spline": "#CC79A7", "SMA-centered": "#000000"}
@@ -185,7 +185,7 @@ def page4(path, mo):
     fig.savefig(path, bbox_inches="tight"); plt.close(fig)
 
 
-def page5(path, ev, X, L, mo):
+def page5(path, ev, X, has_log, L, mo):
     dr, pw = mo["drift"], mo["perf_week"]
     fig, axs = plt.subplots(2, 2, figsize=(15, 9), gridspec_kw={"hspace": 0.4, "wspace": 0.25})
     ax = axs[0, 0]
@@ -203,12 +203,15 @@ def page5(path, ev, X, L, mo):
     ax.plot(pw["week"], pw["base_rate"], marker="o", color=CH_COL, label="observed churn rate"); ax.plot(pw["week"], pw["mean_score"], marker="s", color=RT_COL, label="mean predicted")
     ax.set_xlabel("weeks since 2017-02-01"); ax.set_ylabel("rate"); ax.set_title("Calibration-in-the-large over time (gap = model under/over-predicts)"); ax.legend(frameon=False)
     ax = axs[1, 1]
-    ok = (baseline(X, L) >= MIN_BASELINE)
-    _, first = sm.cusum_down(X, L)
+    h_c, S_, ok = cusum_threshold(X, ev, has_log, L)
+    first = sm.cusum_first(S_, L, h_c)
     wk = ((pd.to_datetime(ev["expiry_date"]) - pd.Timestamp("2017-02-01")).dt.days // 7).clip(lower=0).to_numpy()
-    rows = [(w, (first[(wk == w) & ok] > 0).mean()) for w in sorted(set(wk[ok]))]
-    ax.plot([r[0] for r in rows], [r[1] for r in rows], marker="o", color="#009E73")
-    ax.set_xlabel("weeks since 2017-02-01 (expiry week)"); ax.set_ylabel("share of customers with a CUSUM alarm"); ax.set_title("Anomaly monitoring: CUSUM alarm rate by expiry week")
+    y = ev["is_churn"].to_numpy()
+    for lab, mk, col in (("retained", ok & (y == 0), RT_COL), ("churned", ok & (y == 1), CH_COL)):
+        rows = [(w, (first[mk & (wk == w)] > 0).mean()) for w in sorted(set(wk[ok])) if (mk & (wk == w)).sum() >= 50]
+        ax.plot([q[0] for q in rows], [q[1] for q in rows], marker="o", color=col, label=lab)
+    ax.set_xlabel("weeks since 2017-02-01 (expiry week)"); ax.set_ylabel("share with a CUSUM alarm"); ax.legend(frameon=False)
+    ax.set_title(f"CUSUM alarm rate (threshold h={h_c:.1f}, set so ~10% of retained alarm)")
     fig.suptitle("Page 5 - Drift and monitoring (Unit 4): is the model and its input still behaving as when it was trained?", x=0.01, ha="left", fontweight="bold")
     _foot(fig, "why drift happens; only two months of data, so weekly points are few and noisy; PSI thresholds are conventions, not significance tests.")
     fig.savefig(path, bbox_inches="tight"); plt.close(fig)
@@ -219,7 +222,7 @@ def make_all(out_dir, ev, X, has_log, L, bench, mo, sampling=None) -> List[str]:
     ev = ev.reset_index(drop=True)
     files = [out / f"page{i}.png" for i in range(1, 6)]
     page1(files[0], ev, X, has_log, L, sampling); page2(files[1], ev, X, has_log, L); page3(files[2], bench)
-    page4(files[3], mo); page5(files[4], ev, X, L, mo)
+    page4(files[3], mo); page5(files[4], ev, X, has_log, L, mo)
     titles = ["1. Foundations (Unit 1)", "2. Smoothing lab (Unit 1 / temporal)", "3. Detection lead time (RQ1)", "4. Model output and uncertainty (Unit 4)", "5. Drift and monitoring (Unit 4)"]
     html = ["<!doctype html><html><head><meta charset='utf-8'><title>Silent churn - static fallback</title>"
             "<style>body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#fff;color:#1f2937}img{max-width:100%;border:1px solid #e5e7eb}"
