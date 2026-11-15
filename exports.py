@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from . import smoothers as sm
-from .benchmark import baseline, best_per_family, alarm_leads_for, MIN_BASELINE
+from .benchmark import baseline, best_per_family, alarm_leads_for, cusum_threshold, MIN_BASELINE
 
 # Okabe-Ito (colour-blind-safe categorical) and ColorBrewer YlOrRd 5-class (sequential risk scale)
 CATEGORICAL = ["#0072B2", "#D55E00", "#009E73", "#E69F00", "#56B4E9", "#CC79A7", "#000000", "#999999"]
@@ -97,6 +97,7 @@ LOWESS Python = AVERAGE ( fact_series[lowess14_py] )
 Spline Python = AVERAGE ( fact_series[spline28_py] )
 Raw Minutes = AVERAGE ( fact_series[minutes] )
 CUSUM Statistic = AVERAGE ( fact_series[cusum] )
+CUSUM Threshold = AVERAGE ( fact_series[cusum_threshold] )
 CUSUM Alarm Marker = IF ( MAX ( fact_series[cusum_first_alarm] ) = 1, MAX ( fact_series[minutes] ), BLANK () )
 
 -- ===== Page 3: Detection lead time (fact_leadtime filtered by slicers: metric, group, alpha) =====
@@ -148,7 +149,7 @@ DICTIONARY = [
     ("fact_cusum_week", "share_with_cusum_alarm", "Share of analysable events in that expiry week with a CUSUM alarm."),
     ("fact_series", "minutes", "Minutes listened that day (0 when no log row)."),
     ("fact_series", "sma7_py / ema015_py / lowess14_py / spline28_py", "Python causal smoothers on minutes (end-point estimates)."),
-    ("fact_series", "cusum / cusum_first_alarm", "CUSUM statistic (log scale) and a 1 on the day of the first alarm."),
+    ("fact_series", "cusum / cusum_threshold / cusum_first_alarm", "CUSUM statistic, its alarm threshold (calibrated so ~10% of retained customers ever alarm) and a 1 on the day of the first alarm."),
     ("fact_cohort_curves", "mean / lo / hi", "Cohort mean with normal-approximation 95% CI over analysable events; log(1+minutes) scale."),
     ("fact_leadtime", "metric", "tpr_L7/14/21/28 = share of churners alarmed at least that many days before expiry; tpr_any; median_lead_detected; fpr_achieved."),
     ("fact_leadtime", "lo / hi", "Customer-level bootstrap 2.5% / 97.5%."),
@@ -189,7 +190,8 @@ def export_powerbi(out_dir, ev: pd.DataFrame, X: np.ndarray, has_log: np.ndarray
     chosen = {r.family: r.method for r in best.itertuples()}
     for fam, name in chosen.items():
         ev[f"lead_days_{fam.lower()}"] = alarm_leads_for(reg[name], X, ev, has_log, L)
-    _, cus_first = sm.cusum_down(X, L)
+    cus_h, S_all, _ = cusum_threshold(X, ev, has_log, L)
+    cus_first = sm.cusum_first(S_all, L, cus_h)
     ev["lead_days_cusum"] = np.where(ok, cus_first, -1)
 
     # ---- dashboard sample ----
@@ -217,7 +219,7 @@ def export_powerbi(out_dir, ev: pd.DataFrame, X: np.ndarray, has_log: np.ndarray
     M = np.expm1(X[sel].astype(np.float64)).clip(min=0).astype(np.float32)
     S7, EMA, LOW, SPL = (sm.fir_apply(M, sm.sma_taps(7)), sm.ema(M, 0.15), sm.fir_apply(M, sm.lowess_taps(14)),
                          sm.fir_apply(M, sm.spline_taps(28, 10)))
-    CUS, cfirst = sm.cusum_down(X[sel], L)
+    CUS, cfirst = S_all[sel], cus_first[sel]
     n = len(sel)
     t = np.tile(np.arange(1, L + 1), n)
     ids = np.repeat(ev["event_id"].to_numpy()[sel], L)
@@ -229,7 +231,7 @@ def export_powerbi(out_dir, ev: pd.DataFrame, X: np.ndarray, has_log: np.ndarray
             first_flag[i, L - k] = 1
     fs = pd.DataFrame({"event_id": ids, "t": t, "days_before_expiry": L - t + 1, "day_offset": -(L - t + 1), "calendar_date": cal.strftime("%Y-%m-%d"),
                        "minutes": M.ravel(), "x_log1p_minutes": X[sel].ravel(), "sma7_py": S7.ravel(), "ema015_py": EMA.ravel(),
-                       "lowess14_py": LOW.ravel(), "spline28_py": SPL.ravel(), "cusum": CUS.ravel(), "cusum_first_alarm": first_flag.ravel()})
+                       "lowess14_py": LOW.ravel(), "spline28_py": SPL.ravel(), "cusum": CUS.ravel(), "cusum_threshold": cus_h, "cusum_first_alarm": first_flag.ravel()})
 
     # ---- cohort curves over ALL analysable events ----
     cohorts = {}
